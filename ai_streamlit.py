@@ -10,21 +10,20 @@ Original file is located at
 #!pip install streamlit openai-whisper ffmpeg-python
 #!apt-get install -y ffmpeg
 
-import streamlit as st
-import streamlit.components.v1 as components
+from flask import Flask, render_template_string, request, jsonify
 import whisper
-import ffmpeg
 import uuid
 import os
+import ffmpeg
 
-# Load Whisper model (cached for performance)
-@st.cache_resource
-def load_model():
-    return whisper.load_model("base")  # use "tiny" or "small" to make it faster
+app = Flask(__name__)
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-model = load_model()
+# Load Whisper model
+model = whisper.load_model("base")
 
-# Define Interview Questions
+# Define interview questions
 questions = [
     "Tell me about yourself.",
     "What are your strengths?",
@@ -33,94 +32,113 @@ questions = [
     "Where do you see yourself in five years?"
 ]
 
-# Streamlit App Layout
-st.set_page_config(page_title="🎥 AI Interview Bot", layout="centered")
-st.title("🎥 AI Interview Bot")
+@app.route("/")
+def index():
+    # JavaScript to speak each question with delays
+    js_questions = "\n".join([
+        f"setTimeout(() => speak('{q}'), {i * 8000});"
+        for i, q in enumerate(questions)
+    ])
+    total_time = len(questions) * 8 + 2
 
-st.markdown("""
-Click the button inside the video area to start your video interview.
+    return render_template_string("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>AI Interview Bot</title>
+    </head>
+    <body>
+      <h2>🎤 AI Interview</h2>
+      <video id="preview" autoplay muted playsinline></video><br><br>
+      <button onclick="startInterview()">▶️ Start Interview</button>
 
-The bot will ask **5 questions** using voice.
+      <script>
+        const constraints = { audio: true, video: true };
+        let mediaRecorder;
+        let recordedChunks = [];
 
-Your **video and audio** will be recorded and **downloaded automatically**.
+        function speak(text) {
+          const msg = new SpeechSynthesisUtterance(text);
+          window.speechSynthesis.speak(msg);
+        }
 
-Then, upload the video below to generate the **transcript**.
-""")
+        async function startInterview() {
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          document.getElementById('preview').srcObject = stream;
 
-video_filename = f"interview_{uuid.uuid4().hex}.webm"
+          mediaRecorder = new MediaRecorder(stream);
+          recordedChunks = [];
 
-# JS timing to speak questions at intervals
-js_questions = "\n".join([
-    f"setTimeout(() => speak('{q}'), {i * 8000});"
-    for i, q in enumerate(questions)
-])
-total_time = len(questions) * 8 + 2  # Total duration in seconds
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+              recordedChunks.push(event.data);
+            }
+          };
 
-# Embed HTML + JS inside iframe
-components.html(f"""
-<!DOCTYPE html>
-<html>
-  <body>
-    <h3>🎤 Interview Ready</h3>
-    <video id="preview" autoplay muted playsinline></video><br>
-    <button onclick="startInterview()">▶️ Start Interview</button>
-    <script>
-      const constraints = {{ audio: true, video: true }};
-      let mediaRecorder;
-      let recordedChunks = [];
+          mediaRecorder.onstop = () => {
+            const blob = new Blob(recordedChunks, { type: 'video/webm' });
+            const formData = new FormData();
+            formData.append('video', blob, 'interview.webm');
 
-      function speak(text) {{
-        const msg = new SpeechSynthesisUtterance(text);
-        window.speechSynthesis.speak(msg);
-      }}
+            fetch('/upload', {
+              method: 'POST',
+              body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+              alert("✅ Interview uploaded! Visit /transcript/" + data.filename + " to view the transcript.");
+            });
+          };
 
-      async function startInterview() {{
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        document.getElementById('preview').srcObject = stream;
+          mediaRecorder.start();
 
-        mediaRecorder = new MediaRecorder(stream);
-        mediaRecorder.ondataavailable = e => recordedChunks.push(e.data);
-        mediaRecorder.onstop = saveRecording;
-        mediaRecorder.start();
+          // Speak questions with delay
+          {{ js_questions | safe }}
 
-        // Ask questions with delay
-        {js_questions}
-        setTimeout(() => mediaRecorder.stop(), {total_time * 1000});
-      }}
+          // Stop recording after total duration
+          setTimeout(() => {
+            mediaRecorder.stop();
+          }, {{ total_time * 1000 }});
+        }
+      </script>
+    </body>
+    </html>
+    """, js_questions=js_questions, total_time=total_time)
 
-      function saveRecording() {{
-        const blob = new Blob(recordedChunks, {{ type: 'video/webm' }});
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = '{video_filename}';
-        a.click();
-        alert("✅ Interview complete. Your video has been downloaded. Please upload it below for transcription.");
-      }}
-    </script>
-  </body>
-</html>
-""", height=400)
 
-# Upload recorded video for transcription
-uploaded_file = st.file_uploader("📤 Upload your downloaded interview video (.webm)", type="webm")
+@app.route("/upload", methods=["POST"])
+def upload_video():
+    video = request.files['video']
+    filename = f"{uuid.uuid4().hex}.webm"
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    video.save(filepath)
+    return jsonify({"filename": filename})
 
-if uploaded_file and st.button("📝 Transcribe Interview"):
-    # Save uploaded file
-    with open(video_filename, "wb") as f:
-        f.write(uploaded_file.read())
 
-    # Convert to WAV using ffmpeg
-    audio_path = video_filename.replace(".webm", ".wav")
-    ffmpeg.input(video_filename).output(audio_path).run(overwrite_output=True)
+@app.route("/transcript/<filename>")
+def get_transcript(filename):
+    webm_path = os.path.join(UPLOAD_FOLDER, filename)
+    wav_path = webm_path.replace(".webm", ".wav")
 
-    # Transcribe with Whisper
-    result = model.transcribe(audio_path)
+    ffmpeg.input(webm_path).output(wav_path).run(overwrite_output=True)
+
+    result = model.transcribe(wav_path)
     transcript = result["text"]
 
-    # Show Results
-    st.success("✅ Interview Transcript")
-    for i, q in enumerate(questions):
-        st.markdown(f"**Q{i+1}: {q}**")
-    st.markdown("---")
-    st.markdown("**🧾 Full Transcript of Your Response:**")
-    st.write(transcript)
+    return render_template_string("""
+    <h2>📝 Transcript</h2>
+    <p><b>Questions Asked:</b></p>
+    <ol>
+      {% for q in questions %}
+      <li>{{ q }}</li>
+      {% endfor %}
+    </ol>
+    <hr>
+    <h3>🎧 Full Transcript:</h3>
+    <p>{{ transcript }}</p>
+    """, questions=questions, transcript=transcript)
+
+
+if __name__ == "__main__":
+    app.run(debug=True)
+

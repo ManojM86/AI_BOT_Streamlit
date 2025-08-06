@@ -17,14 +17,14 @@ import ffmpeg
 import uuid
 import os
 
-# Load Whisper model (cached for speed)
+# Load Whisper model (cached for performance)
 @st.cache_resource
 def load_model():
-    return whisper.load_model("base")  # You can also try "tiny" or "small"
+    return whisper.load_model("base")  # use "tiny" or "small" to make it faster
 
 model = load_model()
 
-# Interview Questions
+# Define Interview Questions
 questions = [
     "Tell me about yourself.",
     "What are your strengths?",
@@ -33,95 +33,94 @@ questions = [
     "Where do you see yourself in five years?"
 ]
 
-# Streamlit App UI
+# Streamlit App Layout
 st.set_page_config(page_title="🎥 AI Interview Bot", layout="centered")
-st.title("🎥 AI Interview Bot (Click to Start)")
+st.title("🎥 AI Interview Bot")
 
 st.markdown("""
-Click the button below to start your video interview.  
-Your **camera and microphone** will activate.  
-The bot will ask you **5 questions**, one by one using text-to-speech.  
-Once done, your **recording will download automatically**, and you can **upload it here** for transcript analysis.
+Click the button inside the video area to start your video interview.
+
+The bot will ask **5 questions** using voice.
+
+Your **video and audio** will be recorded and **downloaded automatically**.
+
+Then, upload the video below to generate the **transcript**.
 """)
 
-# Generate unique video file name
 video_filename = f"interview_{uuid.uuid4().hex}.webm"
 
-# Button to start interview
-if st.button("▶️ Start Interview"):
-    # JavaScript for bot TTS question timing
-    js_questions = "\n".join([
-        f"setTimeout(() => speak('{q}'), {i * 8000});"
-        for i, q in enumerate(questions)
-    ])
-    total_time = len(questions) * 8 + 2  # seconds
+# JS timing to speak questions at intervals
+js_questions = "\n".join([
+    f"setTimeout(() => speak('{q}'), {i * 8000});"
+    for i, q in enumerate(questions)
+])
+total_time = len(questions) * 8 + 2  # Total duration in seconds
 
-    # Inject HTML + JS for webcam, mic, MediaRecorder, TTS
-    components.html(f"""
-    <!DOCTYPE html>
-    <html>
-    <body>
-      <h3>🎤 Interview in Progress...</h3>
-      <video id="preview" autoplay muted playsinline></video>
-      <script>
-        const constraints = {{ audio: true, video: true }};
-        let mediaRecorder;
-        let recordedChunks = [];
+# Embed HTML + JS inside iframe
+components.html(f"""
+<!DOCTYPE html>
+<html>
+  <body>
+    <h3>🎤 Interview Ready</h3>
+    <video id="preview" autoplay muted playsinline></video><br>
+    <button onclick="startInterview()">▶️ Start Interview</button>
+    <script>
+      const constraints = {{ audio: true, video: true }};
+      let mediaRecorder;
+      let recordedChunks = [];
 
-        function speak(text) {{
-          const msg = new SpeechSynthesisUtterance(text);
-          window.speechSynthesis.speak(msg);
-        }}
+      function speak(text) {{
+        const msg = new SpeechSynthesisUtterance(text);
+        window.speechSynthesis.speak(msg);
+      }}
 
-        async function startRecording() {{
-          const stream = await navigator.mediaDevices.getUserMedia(constraints);
-          document.getElementById('preview').srcObject = stream;
+      async function startInterview() {{
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        document.getElementById('preview').srcObject = stream;
 
-          mediaRecorder = new MediaRecorder(stream);
-          mediaRecorder.ondataavailable = e => recordedChunks.push(e.data);
-          mediaRecorder.onstop = saveRecording;
+        mediaRecorder = new MediaRecorder(stream);
+        mediaRecorder.ondataavailable = e => recordedChunks.push(e.data);
+        mediaRecorder.onstop = saveRecording;
+        mediaRecorder.start();
 
-          mediaRecorder.start();
-          {js_questions}
-          setTimeout(() => mediaRecorder.stop(), {total_time * 1000});
-        }}
+        // Ask questions with delay
+        {js_questions}
+        setTimeout(() => mediaRecorder.stop(), {total_time * 1000});
+      }}
 
-        function saveRecording() {{
-          const blob = new Blob(recordedChunks, {{ type: 'video/webm' }});
-          const a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = '{video_filename}';
-          a.click();
-          alert("✅ Interview complete. Your video was downloaded. Please upload it below for analysis.");
-        }}
+      function saveRecording() {{
+        const blob = new Blob(recordedChunks, {{ type: 'video/webm' }});
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = '{video_filename}';
+        a.click();
+        alert("✅ Interview complete. Your video has been downloaded. Please upload it below for transcription.");
+      }}
+    </script>
+  </body>
+</html>
+""", height=400)
 
-        document.addEventListener("DOMContentLoaded", () => {{
-          startRecording();
-        }});
-      </script>
-    </body>
-    </html>
-    """, height=300)
+# Upload recorded video for transcription
+uploaded_file = st.file_uploader("📤 Upload your downloaded interview video (.webm)", type="webm")
 
-# Upload the downloaded .webm interview video
-uploaded_file = st.file_uploader("📤 Upload the downloaded .webm video file", type="webm")
-
-# Process and transcribe
 if uploaded_file and st.button("📝 Transcribe Interview"):
-    # Save uploaded video
+    # Save uploaded file
     with open(video_filename, "wb") as f:
         f.write(uploaded_file.read())
 
+    # Convert to WAV using ffmpeg
     audio_path = video_filename.replace(".webm", ".wav")
     ffmpeg.input(video_filename).output(audio_path).run(overwrite_output=True)
 
-    # Transcribe using Whisper
+    # Transcribe with Whisper
     result = model.transcribe(audio_path)
     transcript = result["text"]
 
+    # Show Results
     st.success("✅ Interview Transcript")
     for i, q in enumerate(questions):
         st.markdown(f"**Q{i+1}: {q}**")
     st.markdown("---")
-    st.markdown("**🧾 Full Transcript of Your Answer:**")
+    st.markdown("**🧾 Full Transcript of Your Response:**")
     st.write(transcript)

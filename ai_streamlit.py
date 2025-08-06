@@ -16,12 +16,15 @@ import whisper
 import ffmpeg
 import uuid
 import os
-import time
 
-# Whisper model
-model = whisper.load_model("base")
+# Load Whisper model (cached for speed)
+@st.cache_resource
+def load_model():
+    return whisper.load_model("base")  # You can also try "tiny" or "small"
 
-# Questions
+model = load_model()
+
+# Interview Questions
 questions = [
     "Tell me about yourself.",
     "What are your strengths?",
@@ -30,74 +33,89 @@ questions = [
     "Where do you see yourself in five years?"
 ]
 
+# Streamlit App UI
 st.set_page_config(page_title="🎥 AI Interview Bot", layout="centered")
-st.title("🎥 AI Interview Bot (Automated Recording)")
+st.title("🎥 AI Interview Bot (Click to Start)")
 
 st.markdown("""
-Once the page loads, your camera and microphone will start recording automatically.
-The bot will ask you interview questions one by one.
-After all questions are asked, the recording will stop, and your response will be transcribed.
+Click the button below to start your video interview.  
+Your **camera and microphone** will activate.  
+The bot will ask you **5 questions**, one by one using text-to-speech.  
+Once done, your **recording will download automatically**, and you can **upload it here** for transcript analysis.
 """)
 
+# Generate unique video file name
 video_filename = f"interview_{uuid.uuid4().hex}.webm"
 
-# Create JavaScript to speak questions at intervals
-js_questions = "\n".join([f"setTimeout(() => speak('{q}'), {i*8000});" for i, q in enumerate(questions)])
-total_time = len(questions) * 8 + 2
+# Button to start interview
+if st.button("▶️ Start Interview"):
+    # JavaScript for bot TTS question timing
+    js_questions = "\n".join([
+        f"setTimeout(() => speak('{q}'), {i * 8000});"
+        for i, q in enumerate(questions)
+    ])
+    total_time = len(questions) * 8 + 2  # seconds
 
-components.html(f"""
-<!DOCTYPE html>
-<html>
-<body>
-  <h3>🎤 Recording in progress...</h3>
-  <video id="preview" autoplay muted playsinline></video>
-  <script>
-    const constraints = {{ audio: true, video: true }};
-    let mediaRecorder;
-    let recordedChunks = [];
+    # Inject HTML + JS for webcam, mic, MediaRecorder, TTS
+    components.html(f"""
+    <!DOCTYPE html>
+    <html>
+    <body>
+      <h3>🎤 Interview in Progress...</h3>
+      <video id="preview" autoplay muted playsinline></video>
+      <script>
+        const constraints = {{ audio: true, video: true }};
+        let mediaRecorder;
+        let recordedChunks = [];
 
-    function speak(text) {{
-      const msg = new SpeechSynthesisUtterance(text);
-      window.speechSynthesis.speak(msg);
-    }}
+        function speak(text) {{
+          const msg = new SpeechSynthesisUtterance(text);
+          window.speechSynthesis.speak(msg);
+        }}
 
-    async function startRecording() {{
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      document.getElementById('preview').srcObject = stream;
-      mediaRecorder = new MediaRecorder(stream);
-      mediaRecorder.ondataavailable = e => recordedChunks.push(e.data);
-      mediaRecorder.onstop = saveRecording;
+        async function startRecording() {{
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          document.getElementById('preview').srcObject = stream;
 
-      mediaRecorder.start();
-      {js_questions}
-      setTimeout(() => mediaRecorder.stop(), {total_time * 1000});
-    }}
+          mediaRecorder = new MediaRecorder(stream);
+          mediaRecorder.ondataavailable = e => recordedChunks.push(e.data);
+          mediaRecorder.onstop = saveRecording;
 
-    function saveRecording() {{
-      const blob = new Blob(recordedChunks, {{ type: 'video/webm' }});
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = '{video_filename}';
-      a.click();
-      alert("✅ Interview complete. Video will be downloaded.");
-    }}
+          mediaRecorder.start();
+          {js_questions}
+          setTimeout(() => mediaRecorder.stop(), {total_time * 1000});
+        }}
 
-    startRecording();
-  </script>
-</body>
-</html>
-""", height=300)
+        function saveRecording() {{
+          const blob = new Blob(recordedChunks, {{ type: 'video/webm' }});
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = '{video_filename}';
+          a.click();
+          alert("✅ Interview complete. Your video was downloaded. Please upload it below for analysis.");
+        }}
 
-# Manual upload for transcription
-uploaded_file = st.file_uploader("📤 Upload the recorded .webm file to transcribe", type="webm")
+        document.addEventListener("DOMContentLoaded", () => {{
+          startRecording();
+        }});
+      </script>
+    </body>
+    </html>
+    """, height=300)
+
+# Upload the downloaded .webm interview video
+uploaded_file = st.file_uploader("📤 Upload the downloaded .webm video file", type="webm")
+
+# Process and transcribe
 if uploaded_file and st.button("📝 Transcribe Interview"):
-    # Save uploaded file
+    # Save uploaded video
     with open(video_filename, "wb") as f:
         f.write(uploaded_file.read())
 
     audio_path = video_filename.replace(".webm", ".wav")
     ffmpeg.input(video_filename).output(audio_path).run(overwrite_output=True)
 
+    # Transcribe using Whisper
     result = model.transcribe(audio_path)
     transcript = result["text"]
 
@@ -105,6 +123,5 @@ if uploaded_file and st.button("📝 Transcribe Interview"):
     for i, q in enumerate(questions):
         st.markdown(f"**Q{i+1}: {q}**")
     st.markdown("---")
-    st.markdown("**🧾 Transcript of your answer:**")
-    st.write(transcript)
-
+    st.markdown("**🧾 Full Transcript of Your Answer:**")
+    st.write(t

@@ -6,3 +6,6 @@ numpy
 streamlit
 openai-whisper
 ffmpeg-python
+flask
+openai-whisper
+ffmpeg-python

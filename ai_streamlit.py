@@ -7,8 +7,8 @@ Original file is located at
     https://colab.research.google.com/drive/1he2iCVVHqGEX39Ey7uQdWVXInGfDzme7
 """
 
-!pip install streamlit openai-whisper ffmpeg-python
-!apt-get install -y ffmpeg
+#!pip install streamlit openai-whisper ffmpeg-python
+#!apt-get install -y ffmpeg
 
 import streamlit as st
 import streamlit.components.v1 as components

@@ -124,4 +124,4 @@ if uploaded_file and st.button("📝 Transcribe Interview"):
         st.markdown(f"**Q{i+1}: {q}**")
     st.markdown("---")
     st.markdown("**🧾 Full Transcript of Your Answer:**")
-    st.write(t
+    st.write(transcript)
